@@ -4,83 +4,18 @@ import smtplib
 import email
 from email.message import EmailMessage
 from email.header import decode_header
-import streamlit as st
-import os
-import pathlib
-import textwrap
-
-import google.generativeai as genai
-
-from IPython.display import display
-from IPython.display import Markdown
-
-
-USERNAME = "ml.project.ie@gmail.com"
-PASSWORD = "ucjeravgzupoqyra"
-
 import os
 import ast
 import re
+import json
 import google.generativeai as genai
 
-# Configure the Gemini API
+# --- Configuration ---
+USERNAME = "ml.project.ie@gmail.com"
+PASSWORD = "ucjeravgzupoqyra"
 genai.configure(api_key="AIzaSyDcGbQEPqWiwrauiM96h7_uElQIlowUqmM")
 
-@st.cache_data(show_spinner="Fetching unread emails...")
-def rank_emails_with_gemini(email_list):
-    """
-    Takes a list of email dictionaries and returns the same list with updated
-    'rank' values based on contextual importance, sorted by rank ascending.
-    """
-    import json  # For safe conversion to string
-
-    # Convert the Python list to a JSON-like string for prompt
-    emails_str = json.dumps(email_list, indent=2)
-
-    # Prompt to Gemini
-    prompt = f"""
-You will receive a list of email dictionaries in the format:
-
-[
-  {{"rank": 0, "from": "...", "subject": "...", "date": "...", "body": "..."}},
-  ...
-]
-
-Please update the "rank" field in each dictionary so that:
-- The most relevant or important emails get the lowest rank (1 = highest importance).
-- The least relevant emails get the highest rank (n = lowest importance), where n is the number of emails.
-- No two emails should share the same rank.
-
-Use contextual information to determine importance. For example:
-- Security alerts or account setup emails from Google are more important than casual test emails.
-- Emails with only "hola", "prueba", etc., are less important.
-- Password or verification-related emails are important.
-
-Return only the modified list with updated ranks and preserve all other fields as-is. Do not add any explanation or comments.
-
-Here is the input list:
-
-{emails_str}
-    """
-
-    # Load Gemini model
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-    response = model.generate_content(prompt)
-
-    # Extract Python list from the response text
-    match = re.search(r"\[.*\]", response.text, re.DOTALL)
-    if match:
-        try:
-            ranked_list = ast.literal_eval(match.group(0))
-            # Sort by rank
-            sorted_emails = sorted(ranked_list, key=lambda x: x["rank"])
-            return sorted_emails
-        except Exception as e:
-            print("Failed to parse Gemini response:", e)
-            return None
-    else:
-        print("No list found in Gemini response.")
-        return None
+# --- Helper Functions ---
 
 def clean_text(text):
     if isinstance(text, bytes):
@@ -97,7 +32,7 @@ def fetch_last_emails(username, password, n=20):
         imap = imaplib.IMAP4_SSL("imap.gmail.com")
         imap.login(username, password)
         imap.select("inbox")
-        status, messages = imap.search(None, "ALL")  # Only unread -> UNSEEN
+        status, messages = imap.search(None, "ALL")  # Use "UNSEEN" for unread only
 
         email_ids = messages[0].split()
         if not email_ids:
@@ -128,7 +63,7 @@ def fetch_last_emails(username, password, n=20):
                         body = msg.get_payload(decode=True).decode()
 
                     emails.append({
-                        "rank":0,
+                        "rank": 0,
                         "from": from_,
                         "subject": subject,
                         "date": date_,
@@ -137,9 +72,65 @@ def fetch_last_emails(username, password, n=20):
         imap.logout()
     except Exception as e:
         st.error(f"Error fetching emails: {e}")
-    
-    
+
     return emails
+
+
+def rank_emails_with_gemini(email_list):
+    """
+    Takes a list of email dictionaries and returns it with updated
+    'rank' values based on contextual importance, sorted by rank ascending.
+    """
+    emails_str = json.dumps(email_list, indent=2)
+
+    prompt = f"""
+You will receive a list of email dictionaries in the format:
+
+[
+  {{"rank": 0, "from": "...", "subject": "...", "date": "...", "body": "..."}},
+  ...
+]
+
+Please update the "rank" field in each dictionary so that:
+- The most relevant or important emails get the lowest rank (1 = highest importance).
+- The least relevant emails get the highest rank (n = lowest importance), where n is the number of emails.
+- No two emails should share the same rank.
+
+Use contextual information to determine importance. For example:
+- Security alerts or account setup emails from Google are more important than casual test emails.
+- Emails with only "hola", "prueba", etc., are less important.
+- Password or verification-related emails are important.
+
+Return only the modified list with updated ranks and preserve all other fields as-is. Do not add any explanation or comments.
+
+Here is the input list:
+
+{emails_str}
+    """
+
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    response = model.generate_content(prompt)
+
+    match = re.search(r"\[.*\]", response.text, re.DOTALL)
+    if match:
+        try:
+            ranked_list = ast.literal_eval(match.group(0))
+            return sorted(ranked_list, key=lambda x: x["rank"])
+        except Exception as e:
+            st.error(f"Failed to parse Gemini response: {e}")
+            return []
+    else:
+        st.error("No list found in Gemini response.")
+        return []
+
+
+@st.cache_data(show_spinner="📬 Fetching and ranking emails...", ttl=300)
+def fetch_and_rank_emails(username, password, n=20):
+    emails = fetch_last_emails(username, password, n)
+    if emails:
+        return rank_emails_with_gemini(emails)
+    return []
+
 
 def send_email_reply(to_email, subject, body, username, password):
     try:
@@ -157,14 +148,20 @@ def send_email_reply(to_email, subject, body, username, password):
         st.error(f"Failed to send email: {e}")
         return False
 
-# Layout setup
+
+# --- Streamlit UI ---
+
 st.set_page_config(layout="wide")
-st.title("📬 Email Viewer with Reply")
+st.title("📬 Email Viewer with Gemini Ranking & Reply")
 
-emails = fetch_last_emails(USERNAME, PASSWORD)
+# Optional refresh button
+if st.button("🔄 Refresh Inbox"):
+    st.cache_data.clear()
 
-ranked_emails = rank_emails_with_gemini(emails)
-if emails:
+# Load emails (cached unless refreshed)
+ranked_emails = fetch_and_rank_emails(USERNAME, PASSWORD)
+
+if ranked_emails:
     left_col, right_col = st.columns([1, 2])
 
     with left_col:
