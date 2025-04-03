@@ -365,3 +365,5 @@ if ranked_emails:
         email_response_assistant(selected_full_email, selected_index)
 else:
     st.info("No emails found.")
+
+#gols
