@@ -229,15 +229,18 @@ def call_gemini(prompt):
     else:
         return f"Error {response.status_code}: {response.text}"
 
-def email_response_assistant(email_dict, selected_index):
+def email_response_assistant(email_dict):
     st.subheader("🤖 AI Reply Assistant")
 
-    # Clear previous reply when switching emails
-    if st.session_state.get("last_reply_index") != selected_index:
+    # Initialize session state
+    if "ai_response" not in st.session_state:
         st.session_state.ai_response = ""
-        st.session_state.chat_input = ""
+    if "tone" not in st.session_state:
+        st.session_state.tone = "Neutral"
+    if "show_response" not in st.session_state:
         st.session_state.show_response = False
-        st.session_state.last_reply_index = selected_index
+    if "chat_input" not in st.session_state:
+        st.session_state.chat_input = ""
 
     subject = email_dict.get("subject", "No Subject")
     sender = email_dict.get("from", "Unknown")
@@ -246,21 +249,19 @@ def email_response_assistant(email_dict, selected_index):
 
     # Tone selection
     st.subheader("Select Formality Level")
-    tone = st.select_slider(
+    st.session_state.tone = st.select_slider(
         "Tone",
         options=["Casual", "Neutral", "Formal"],
-        value=st.session_state.get("tone", "Neutral"),
-        key=f"tone_selector_{selected_index}"
+        value=st.session_state.tone
     )
-    st.session_state.tone = tone
 
-    # Generate AI reply
-    if st.button("✍️ Generate AI Reply", key=f"generate_{selected_index}"):
+    if st.button("✍️ Generate AI Reply"):
         st.session_state.show_response = True
         st.session_state.ai_response = ""
 
+    # Generate reply
     if st.session_state.show_response and not st.session_state.ai_response:
-        prompt = f"{st.session_state.email_context}\n\nInstruction: Write a professional email reply.\n\nWrite in a {tone.lower()} tone."
+        prompt = f"{st.session_state.email_context}\n\nInstruction: Write a professional email reply.\n\nWrite in a {st.session_state.tone.lower()} tone."
         with st.spinner("Generating response..."):
             st.session_state.ai_response = call_gemini(prompt)
 
@@ -270,27 +271,22 @@ def email_response_assistant(email_dict, selected_index):
         st.text(st.session_state.ai_response)
 
         st.subheader("🔧 Refine Your Reply")
-        with st.form(key=f"refine_form_{selected_index}"):
-            chat_input = st.text_input("Ask to revise or update the reply:", value=st.session_state.get("chat_input", ""), label_visibility="collapsed")
-            submitted = st.form_submit_button("Apply")
-            if submitted and chat_input.strip():
-                followup_prompt = (
-                    f"Original Email:\n{st.session_state.email_context}\n\n"
-                    f"Current AI Reply:\n{st.session_state.ai_response}\n\n"
-                    f"Instruction: {chat_input}\n\nWrite in a {tone.lower()} tone."
-                )
+        col1, col2 = st.columns([6, 1])
+        with col1:
+            st.session_state.chat_input = st.text_input("Ask to revise or update the reply:", value=st.session_state.chat_input, label_visibility="collapsed")
+        with col2:
+            if st.button("Update") and st.session_state.chat_input.strip():
+                followup_prompt = f"Original Email:\n{st.session_state.email_context}\n\nCurrent AI Reply:\n{st.session_state.ai_response}\n\nInstruction: {st.session_state.chat_input}\n\nWrite in a {st.session_state.tone.lower()} tone."
                 with st.spinner("Updating reply..."):
                     st.session_state.ai_response = call_gemini(followup_prompt)
                     st.session_state.chat_input = ""
                 st.rerun()
-            else:
-                st.session_state.chat_input = chat_input  # persist input while typing
 
-        # Send reply
+        # Send final AI-generated reply
         st.subheader("📤 Send This Reply")
-        if st.button("Send Reply", key=f"send_{selected_index}"):
+        if st.button("Send Reply"):
             to_email = email_dict["from"].split("<")[-1].replace(">", "").strip()
-            success = send_email_reply(to_email, subject, st.session_state.ai_response, USERNAME, PASSWORD)
+            success = send_email_reply(to_email, email_dict["subject"], st.session_state.ai_response, USERNAME, PASSWORD)
             if success:
                 st.success("✅ Reply sent!")
 
@@ -362,6 +358,6 @@ if ranked_emails:
 
         # ✍️ Reply
         # 👉 Run the assistant with selected full email
-        email_response_assistant(selected_full_email, selected_index)
+        email_response_assistant(selected_full_email)
 else:
     st.info("No emails found.")
