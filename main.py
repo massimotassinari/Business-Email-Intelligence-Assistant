@@ -51,7 +51,7 @@ def clean_text(text):
 
 # --- Email Fetching & Parsing ---
 
-def fetch_last_emails(username, password, n=10):
+def fetch_last_emails(username, password, n=20):
     emails = []
     try:
         imap = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -114,17 +114,18 @@ def simplify_email_data(email_list, max_chars=300):
 
 # --- Gemini Integration ---
 
-def rank_emails_with_gemini(email_list):
+def rank_emails_with_gemini(email_list, sort_option="Default"):
     emails_str = json.dumps(email_list, indent=2)
-    prompt = f"""
-You will receive a list of email dictionaries in the format:
 
-[
-  {{"rank": 0, "from": "...", "subject": "...", "date": "...", "body": "..."}},
-  ...
-]
-
-Please update the "rank" field in each dictionary so that:
+    if sort_option == "Urgency":
+        criteria = "Rank emails by urgency based on tone, keywords, and deadlines mentioned. Prioritize high-stakes language and time-sensitive instructions."
+    elif sort_option == "Time":
+        criteria = "Rank emails by how close the deadline is. Emails with immediate or near-term deadlines come first."
+    elif sort_option == "Sender":
+        criteria = "Rank emails by sender importance (e.g., executives > directors > team leads > peers > interns)."
+    else:
+        criteria = """
+Please update the 'rank' field in each dictionary so that:
 - The most relevant or important emails get the lowest rank (1 = highest importance).
 - The least relevant emails get the highest rank (n = lowest importance), where n is the number of emails.
 - No two emails should share the same rank.
@@ -133,14 +134,25 @@ Use contextual information to determine importance. For example:
 - Security alerts or account setup emails from Google are more important than casual test emails.
 - Emails with only "hola", "prueba", etc., are less important.
 - Password or verification-related emails are important.
+"""
 
+    prompt = f"""
+You will receive a list of email dictionaries in the format:
+
+[
+  {{"rank": 0, "from": "...", "subject": "...", "date": "...", "body": "..."}},
+  ...
+]
+
+Your task: {criteria}
 Return only the modified list with updated ranks and preserve all other fields as-is. Do not add any explanation or comments.
 
 Here is the input list:
 
 {emails_str}
-    """
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+"""
+
+    model = genai.GenerativeModel('gemini-2.0-flash')
     response = model.generate_content(prompt)
 
     match = re.search(r"\[.*\]", response.text, re.DOTALL)
@@ -155,6 +167,7 @@ Here is the input list:
         st.error("No list found in Gemini response.")
         return []
 
+
 def summarize_email_with_gemini(email_body, max_words=300):
     email_body = clean_for_gemini(email_body)
     prompt = f"""
@@ -167,7 +180,7 @@ Email:
 
 Summary:
 """
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     response = model.generate_content(prompt)
     return response.text.strip()
 
@@ -185,19 +198,18 @@ User question: "{question}"
 
 Answer:
 """
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     response = model.generate_content(prompt)
     return response.text.strip()
 
 # --- Caching ---
 
 @st.cache_data(show_spinner="📬 Fetching and ranking emails...", ttl=300)
-def fetch_and_rank_emails(username, password, n=10):
+def fetch_and_rank_emails(username, password, n=20, sort_option="Default"):
     raw_emails = fetch_last_emails(username, password, n)
     simplified = simplify_email_data(raw_emails)
-    ranked = rank_emails_with_gemini(simplified)
+    ranked = rank_emails_with_gemini(simplified, sort_option=sort_option)
     return ranked, raw_emails
-
 # --- Reply Handler ---
 
 def send_email_reply(to_email, subject, body, username, password):
@@ -298,8 +310,23 @@ def email_response_assistant(email_dict, selected_index):
 
 # --- Streamlit UI ---
 
+#st.set_page_config(layout="wide")
+#st.title("📬 Email Viewer with Gemini Assistant")
+
 st.set_page_config(layout="wide")
-st.title("📬 Email Viewer with Gemini Assistant")
+
+col1, col2 = st.columns([0.2, 0.8])
+with col1:
+    st.image("kawaii_mailbox_bot_transparent_clean.png", width=200)
+with col2:
+    st.markdown("""
+    <h1 style='font-size: 90px; margin-bottom: 0;'>InboxIE</h1>
+    <p style='font-size: 18px; color: gray;'>Powered by Gemini + Streamlit</p>
+""", unsafe_allow_html=True)
+
+    #st.title("ImboxIE")
+    #st.caption("Powered by Gemini + Streamlit")
+
 
 if st.button("🔄 Refresh Inbox"):
     st.cache_data.clear()
@@ -311,6 +338,13 @@ if ranked_emails:
 
     with left_col:
         st.subheader("📥 Inbox")
+
+        sort_option = st.selectbox(
+            "Sort emails by:",
+            options=["Default (Smart Rank)", "Time", "Urgency", "Sender"],
+            index=0
+        )
+
         selected_index = st.radio(
             "Select an email:",
             options=list(range(len(ranked_emails))),
@@ -345,7 +379,7 @@ if ranked_emails:
                 st.session_state.email_summary = summarize_email_with_gemini(selected_full_email["body"])
                 st.session_state.last_index = selected_index
 
-        st.subheader("📝 Summary of Email")
+        st.subheader("Summary")
         st.markdown(st.session_state.email_summary)
 
         # ❓ Q&A
